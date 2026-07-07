@@ -11,8 +11,14 @@
 (defn clean [_]
       (b/delete {:path "target"}))
 
+(defn compile-java [_]
+      (b/javac {:src-dirs ["src"]
+                :class-dir class-dir
+                :basis basis}))
+
 (defn jar [_]
       (clean nil)
+      (compile-java nil)
       (b/write-pom {:class-dir class-dir
                     :lib lib
                     :version version
@@ -25,16 +31,3 @@
       (b/jar {:class-dir class-dir
               :jar-file jar-file})
       (println "Jar created:" jar-file))
-
-(defn uberjar [_]
-      (clean nil)
-      (b/compile-clj {:basis basis
-                      :src-dirs ["src"]
-                      :class-dir class-dir})
-      (b/uber {:class-dir class-dir
-               :uber-file uber-file
-               :basis basis})
-      (println "Uberjar created:" uber-file))
-
-(defn test-all [_]
-      (b/process {:command-args ["clojure" "-M:test"]}))

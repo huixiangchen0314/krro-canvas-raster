@@ -24,5 +24,10 @@
             <artifactId>krro-canvas-core</artifactId>
             <version>0.1.0</version>
         </dependency>
+        <dependency>
+            <groupId>top.kzre</groupId>
+            <artifactId>color-utils</artifactId>
+            <version>1.0-SNAPSHOT</version>
+        </dependency>
     </dependencies>
 </project>

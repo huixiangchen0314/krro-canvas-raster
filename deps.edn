@@ -1,7 +1,7 @@
 {:paths ["src"]
  :deps {org.clojure/clojure {:mvn/version "1.11.1"}
         top.kzre/krro-canvas-core {:mvn/version "0.1.0"}
-        top.kzre/krro-color {:mvn/version "0.1.0"}
+        top.kzre/color-utils {:mvn/version "1.0-SNAPSHOT"}
         }
 
  :aliases {:test {:extra-paths ["test"]
