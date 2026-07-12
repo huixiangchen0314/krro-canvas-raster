@@ -2,12 +2,49 @@
   "光栅图层实现：通过画布 API 获取底层数组进行批量渲染，提升性能。
    提供激活光栅后端的便捷函数，替换 *merge-layer!* 并注册 :raster 图层。"
   (:require
-    [top.kzre.krro.canvas.core.canvas.protocol :as cp]
-    [top.kzre.krro.canvas.core.core :as c]
-    [top.kzre.krro.canvas.raster.util :as util]
-    [top.kzre.krro.canvas.core.layer.util :as lu]
-    [top.kzre.krro.canvas.core.rect :as rect])
-  (:import [top.kzre.krro.canvas.raster RenderLayer Mask]))
+   [top.kzre.krro.canvas.core.canvas.protocol :as cp]
+   [top.kzre.krro.canvas.core.canvas.raster :as rc]
+   [top.kzre.krro.canvas.core.core :as c]
+   [top.kzre.krro.canvas.core.layer.util :as lu]
+   [top.kzre.krro.canvas.core.rect :as rect]
+   [top.kzre.krro.canvas.raster.spec]
+   [top.kzre.krro.canvas.raster.util :as util])
+  (:import
+   (java.util UUID)
+   [top.kzre.krro.canvas.raster RenderLayer]))
+
+(defn make-raster-layer
+  "创建一个光栅图层，包含一个 RasterCanvas。
+   必选参数：width, height（整数）
+   可选关键字：
+     :id          - 图层唯一标识（关键字，默认自动生成）
+     :name        - 图层名称（默认 \"Raster Layer\"）
+     :opacity     - 不透明度 0.0~1.0（默认 1.0）
+     :blend-mode  - 混合模式关键字（默认 :normal）
+     :visible?    - 是否可见（默认 true）
+     :backend     - 渲染后端（默认 :raster）
+     其他变换属性 :x, :y, :scale-x, :scale-y, :rotation 等"
+  [width height & {:keys [id name opacity blend-mode visible? backend
+                          data]
+                   :or   {id         (keyword (str "layer-" (UUID/randomUUID)))
+                          name       "Raster Layer"
+                          opacity    1.0
+                          blend-mode :normal
+                          visible?   true
+                          backend    :default}
+                   :as   opts}]
+  (let [canvas (if data
+                 (rc/make-raster-canvas width height :data data)
+                 (rc/make-raster-canvas width height))]
+    (merge {:id         id
+            :type       :raster
+            :name       name
+            :opacity    opacity
+            :blend-mode blend-mode
+            :visible?   visible?
+            :backend    backend
+            :canvas     canvas}
+           (select-keys opts [:x :y :scale-x :scale-y :rotation :mask]))))
 
 
 (defn- merge-layer-impl
@@ -15,13 +52,9 @@
   (let [src-data   (:data source)
         blend-mode (util/blend-mode-str (:blend-mode source) :normal)
         opacity    (float (get source :opacity 1.0))
-        transform  (get source :transform lu/identity-matrix)
-        masked-src (if-let [mask (:mask source)]
-                     (if (and (vector? mask) (= :data (first mask)))
-                       (Mask/applyMask src-data (second mask))
-                       src-data)
-                     src-data)]
-    (RenderLayer/blendTransformed data masked-src w h transform blend-mode opacity)))
+        transform  (get source :transform lu/identity-matrix)]
+
+    (RenderLayer/blendTransformed data src-data w h transform blend-mode opacity)))
 
 
 (defn use-raster-merge-layer!
@@ -36,16 +69,12 @@
         blend-mode  (util/blend-mode-str (:blend-mode layer) :normal)
         opacity     (float (get layer :opacity 1.0))
         transform   (get layer :transform lu/identity-matrix)
-        masked-data (if-let [mask (:mask layer)]
-                      (if (and (vector? mask) (= :data (first mask)))
-                        (Mask/applyMask layer-data (second mask))
-                        layer-data)
-                      layer-data)
-        dirty       (cp/dirty-rect canvas)                ;; [x y w h] 或 nil
+        ;; 不再处理蒙版
+        dirty       (cp/dirty-rect canvas)
         dirty-arr   (when dirty
                       (some-> dirty
-                              (rect/clip-rect w h)        ;; 裁剪到画布尺寸
-                              rect/rect->array))]         ;; 转为 int-array
+                              (rect/clip-rect w h)
+                              rect/rect->array))]
     (if dirty-arr
-      (RenderLayer/blendTransformedDirty data masked-data w h transform blend-mode opacity dirty-arr)
-      (RenderLayer/blendTransformed data masked-data w h transform blend-mode opacity))))
+      (RenderLayer/blendTransformedDirty data layer-data w h transform blend-mode opacity dirty-arr)
+      (RenderLayer/blendTransformed data layer-data w h transform blend-mode opacity))))
