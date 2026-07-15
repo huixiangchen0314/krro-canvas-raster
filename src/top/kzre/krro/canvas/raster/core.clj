@@ -10,8 +10,8 @@
    [top.kzre.krro.canvas.raster.spec]
    [top.kzre.krro.canvas.raster.util :as util])
   (:import
-   (java.util UUID)
-   [top.kzre.krro.canvas.raster RenderLayer]))
+    (java.util UUID)
+    [top.kzre.krro.canvas.raster Renderer]))
 
 (defn make-raster-layer
   "创建一个光栅图层，包含一个 RasterCanvas。
@@ -54,7 +54,7 @@
         opacity    (float (get source :opacity 1.0))
         transform  (get source :transform lu/identity-matrix)]
 
-    (RenderLayer/blendTransformed data src-data w h transform blend-mode opacity)))
+    (Renderer/blendTransformed data src-data w h transform blend-mode opacity)))
 
 
 (defn use-raster-merge-layer!
@@ -76,5 +76,5 @@
                               (rect/clip-rect w h)
                               rect/rect->array))]
     (if dirty-arr
-      (RenderLayer/blendTransformedDirty data layer-data w h transform blend-mode opacity dirty-arr)
-      (RenderLayer/blendTransformed data layer-data w h transform blend-mode opacity))))
+      (Renderer/blendTransformedDirty data layer-data w h transform blend-mode opacity dirty-arr)
+      (Renderer/blendTransformed data layer-data w h transform blend-mode opacity))))

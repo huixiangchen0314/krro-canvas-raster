@@ -2,9 +2,9 @@ package top.kzre.krro.canvas.raster;
 
 import top.kzre.colorutils.blend.Blends;
 
-public final class RenderLayer {
+public final class Renderer {
 
-    private RenderLayer() {}
+    private Renderer() {}
 
     // ── 公开全画布混合 ──────────────────────
     public static void blendTransformed(float[] dst, float[] src,
