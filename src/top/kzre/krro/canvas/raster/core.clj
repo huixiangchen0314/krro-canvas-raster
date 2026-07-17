@@ -2,16 +2,14 @@
   "光栅图层实现：通过画布 API 获取底层数组进行批量渲染，提升性能。
    提供激活光栅后端的便捷函数，替换 *merge-layer!* 并注册 :raster 图层。"
   (:require
-   [top.kzre.krro.canvas.core.canvas.protocol :as cp]
-   [top.kzre.krro.canvas.core.canvas.raster :as rc]
-   [top.kzre.krro.canvas.core.core :as c]
-   [top.kzre.krro.canvas.core.layer.util :as lu]
-   [top.kzre.krro.canvas.core.rect :as rect]
-   [top.kzre.krro.canvas.raster.spec]
-   [top.kzre.krro.canvas.raster.util :as util])
+    [top.kzre.krro.util.tiled-canvas :as tc]
+    [top.kzre.krro.canvas.core.core :as c]
+    [top.kzre.krro.canvas.core.layer.util :as lu]
+    [top.kzre.krro.canvas.raster.spec]
+    [top.kzre.krro.canvas.raster.util :as util])
   (:import
     (java.util UUID)
-    [top.kzre.krro.canvas.raster Renderer]))
+    (top.kzre.krro.canvas.raster Renderer)))
 
 (defn make-raster-layer
   "创建一个光栅图层，包含一个 RasterCanvas。
@@ -24,18 +22,16 @@
      :visible?    - 是否可见（默认 true）
      :backend     - 渲染后端（默认 :raster）
      其他变换属性 :x, :y, :scale-x, :scale-y, :rotation 等"
-  [width height & {:keys [id name opacity blend-mode visible? backend
-                          data]
+  [& {:keys [id name opacity blend-mode visible? backend tile-size]
                    :or   {id         (keyword (str "layer-" (UUID/randomUUID)))
                           name       "Raster Layer"
                           opacity    1.0
+                          tile-size 256
                           blend-mode :normal
                           visible?   true
                           backend    :default}
                    :as   opts}]
-  (let [canvas (if data
-                 (rc/make-raster-canvas width height :data data)
-                 (rc/make-raster-canvas width height))]
+  (let [canvas (tc/make-canvas :tile-size tile-size)]
     (merge {:id         id
             :type       :raster
             :name       name
@@ -46,14 +42,12 @@
             :canvas     canvas}
            (select-keys opts [:x :y :scale-x :scale-y :rotation :mask]))))
 
-
 (defn- merge-layer-impl
   [^floats data w h source]
   (let [src-data   (:data source)
         blend-mode (util/blend-mode-str (:blend-mode source) :normal)
         opacity    (float (get source :opacity 1.0))
         transform  (get source :transform lu/identity-matrix)]
-
     (Renderer/blendTransformed data src-data w h transform blend-mode opacity)))
 
 
@@ -65,16 +59,13 @@
 (defmethod c/render-layer! :raster
   [layer ^floats data w h]
   (let [canvas      (:canvas layer)
-        layer-data  (cp/data canvas)
+        {:keys [tiles tile-size]} canvas          ;; tiles 是 Clojure map (Long -> float[])
         blend-mode  (util/blend-mode-str (:blend-mode layer) :normal)
         opacity     (float (get layer :opacity 1.0))
-        transform   (get layer :transform lu/identity-matrix)
-        ;; 不再处理蒙版
-        dirty       (cp/dirty-rect canvas)
-        dirty-arr   (when dirty
-                      (some-> dirty
-                              (rect/clip-rect w h)
-                              rect/rect->array))]
-    (if dirty-arr
-      (Renderer/blendTransformedDirty data layer-data w h transform blend-mode opacity dirty-arr)
-      (Renderer/blendTransformed data layer-data w h transform blend-mode opacity))))
+        transform   (or (get layer :transform) lu/identity-matrix)
+        matrix      (if (vector? transform) (float-array transform) (float-array transform))
+        dirty-tiles (:dirty-tiles layer)]          ;; nil 或 Set<Long>
+    (Renderer/blendTransformedTiled data (int w) (int h)
+                                    tiles (int tile-size)
+                                    matrix blend-mode opacity
+                                    dirty-tiles)))
