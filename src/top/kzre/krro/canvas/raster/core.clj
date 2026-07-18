@@ -8,7 +8,7 @@
     [top.kzre.krro.canvas.raster.spec]
     [top.kzre.krro.canvas.raster.util :as util])
   (:import
-    (java.util UUID)
+    (java.util Collection HashSet UUID)
     (top.kzre.krro.canvas.raster Renderer)))
 
 (defn make-raster-layer
@@ -57,15 +57,16 @@
 
 
 (defmethod c/render-layer! :raster
-  [layer ^floats data w h]
+  [layer ^floats data w h {:keys [dirty-tiles] :as opts}]
   (let [canvas      (:canvas layer)
-        {:keys [tiles tile-size]} canvas          ;; tiles 是 Clojure map (Long -> float[])
+        {:keys [tiles tile-size]} canvas
         blend-mode  (util/blend-mode-str (:blend-mode layer) :normal)
         opacity     (float (get layer :opacity 1.0))
         transform   (or (get layer :transform) lu/identity-matrix)
-        matrix      (if (vector? transform) (float-array transform) (float-array transform))
-        dirty-tiles (:dirty-tiles layer)]          ;; nil 或 Set<Long>
+        matrix      (float-array transform)
+        ;; 转换为 Java Set，若非空则传入，否则传 nil 表示全量
+        java-dirty  (when (seq dirty-tiles) (HashSet. ^Collection dirty-tiles))]
     (Renderer/blendTransformedTiled data (int w) (int h)
                                     tiles (int tile-size)
                                     matrix blend-mode opacity
-                                    dirty-tiles)))
+                                    java-dirty)))

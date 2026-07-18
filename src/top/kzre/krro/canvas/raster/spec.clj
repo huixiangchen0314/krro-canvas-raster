@@ -10,8 +10,7 @@
 
 ;; 瓦片键：位编码后的 long，兼容任意整数值
 (s/def ::tile-key integer?)
-;; 脏瓦片集合：一个包含多个瓦片键的去重集合
-(s/def ::dirty-tiles (s/coll-of ::tile-key :kind set?))
+
 
 (s/def ::origin-x int?)
 (s/def ::origin-y int?)
@@ -19,7 +18,7 @@
 ;; 光栅图层属性：画布必选，脏瓦片和原点可选
 (s/def ::raster-props
   (s/keys :req-un [::canvas]
-          :opt-un [::origin-x ::origin-y ::dirty-tiles]))
+          :opt-un [::origin-x ::origin-y]))
 
 (defmethod layer-spec/layer-spec :raster [_]
   ::raster-props)

@@ -65,10 +65,12 @@ public final class Renderer {
             int tx = TiledCanvasUtils.unpackTx(key);
             int ty = TiledCanvasUtils.unpackTy(key);
 
-            int startX = tx * srcTileSize;
-            int startY = ty * srcTileSize;
+            // 钳制目标坐标到缓冲区范围内，防止越界
+            int startX = Math.max(0, tx * srcTileSize);
+            int startY = Math.max(0, ty * srcTileSize);
             int endX = Math.min(startX + srcTileSize, dstW);
             int endY = Math.min(startY + srcTileSize, dstH);
+            if (startX >= endX || startY >= endY) continue;  // 整个瓦片都在画布外，跳过
 
             for (int y = startY; y < endY; y++) {
                 for (int x = startX; x < endX; x++) {
