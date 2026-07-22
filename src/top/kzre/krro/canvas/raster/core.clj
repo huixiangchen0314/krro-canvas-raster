@@ -13,6 +13,8 @@
 
 (defn make-raster-layer
   "创建一个光栅图层，包含一个 TiledCanvas 画布。
+  :tile-size   - 瓦片大小（像素）
+
    可选关键字：
      :id          - 图层唯一标识（关键字，默认自动生成）
      :name        - 图层名称（默认 \"Raster Layer\"）
@@ -20,13 +22,12 @@
      :blend-mode  - 混合模式关键字（默认 :normal）
      :visible?    - 是否可见（默认 true）
      :backend     - 渲染后端（默认 :default）
-     :tile-size   - 瓦片大小（像素，默认 256）
+
      其他变换属性 :x, :y, :scale-x, :scale-y, :rotation 等"
-  [& {:keys [id name opacity blend-mode visible? backend tile-size]
+  [tile-size & {:keys [id name opacity blend-mode visible? backend ]
       :or   {id         (keyword (str "layer-" (UUID/randomUUID)))
              name       "Raster Layer"
              opacity    1.0
-             tile-size  64
              blend-mode :normal
              visible?   true
              backend    :default}
@@ -49,10 +50,10 @@
         blend-mode  (util/blend-mode-str (:blend-mode layer) :normal)
         opacity     (float (get layer :opacity 1.0))
         transform   (:transform layer lu/identity-matrix)
-        matrix      (float-array transform)
+        matrix2d      (float-array transform)
         java-dirty  (when (seq dirty-tiles)
                       (HashSet. ^Collection dirty-tiles))]
     (TiledCanvasRenderer/blendTransformedTiled data (int w) (int h)
                                                canvas
-                                               matrix blend-mode opacity
+                                               matrix2d blend-mode opacity
                                                java-dirty)))
