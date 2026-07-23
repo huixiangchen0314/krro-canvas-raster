@@ -5,14 +5,18 @@ import top.kzre.krro.util.tile.Canvas;
 import top.kzre.krro.util.tile.TiledCanvas;
 
 import java.util.*;
+import java.util.concurrent.ForkJoinPool;
+import java.util.concurrent.RecursiveTask;
 
 /**
  * 洪水填充执行器，负责根据 {@link FloodFillRequest} 组装判定与动作，
  * 执行扫描线/非连续填充算法，并收集脏瓦片，返回填充结果。
  * <p>
- * 包含扩展后处理及间隙封闭功能。
+ * 包含扩展后处理、间隙封闭功能，以及非连续填充的 ForkJoin 并行优化。
  */
 public final class FloodFillExecutor {
+    private static final int PARALLEL_ENABLE_THRESHOLD = 65536;  // 256×256
+
     private static final FloodFillExecutor INSTANCE = new FloodFillExecutor();
     private FloodFillExecutor() {}
 
@@ -244,12 +248,32 @@ public final class FloodFillExecutor {
         }
     }
 
-    // ---------- 非连续全局替换 ----------
+
+    // ---------- 非连续全局替换（自动选择串行或并行） ----------
     private long fillDiscontiguous(Canvas canvas,
                                    int minX, int minY, int maxX, int maxY, int tileSize,
                                    float[] fillColor,
                                    FillPredicate predicate, FillAction action,
                                    Set<Long> dirtyTiles, BitSet filledMask) {
+        int width = maxX - minX + 1;
+        int height = maxY - minY + 1;
+        long pixels = (long) width * height;
+
+        if (pixels <= PARALLEL_ENABLE_THRESHOLD) {
+            return fillDiscontiguousSerial(canvas, minX, minY, maxX, maxY, tileSize,
+                    fillColor, predicate, action, dirtyTiles, filledMask);
+        } else {
+            return fillDiscontiguousParallel(canvas, minX, minY, maxX, maxY, tileSize,
+                    fillColor, predicate, action, dirtyTiles);
+        }
+    }
+
+    // 串行版本
+    private long fillDiscontiguousSerial(Canvas canvas,
+                                         int minX, int minY, int maxX, int maxY, int tileSize,
+                                         float[] fillColor,
+                                         FillPredicate predicate, FillAction action,
+                                         Set<Long> dirtyTiles, BitSet filledMask) {
         int width = maxX - minX + 1;
         long filled = 0;
         for (int y = minY; y <= maxY; y++) {
@@ -263,6 +287,107 @@ public final class FloodFillExecutor {
             }
         }
         return filled;
+    }
+
+    // 并行版本（ForkJoin）
+    private long fillDiscontiguousParallel(Canvas canvas,
+                                           int minX, int minY, int maxX, int maxY, int tileSize,
+                                           float[] fillColor,
+                                           FillPredicate predicate, FillAction action,
+                                           Set<Long> dirtyTiles) {
+        DiscontiguousTask task = new DiscontiguousTask(canvas, minX, minY, maxX, maxY,
+                tileSize, fillColor, predicate, action);
+        DiscontiguousResult result = ForkJoinPool.commonPool().invoke(task);
+        dirtyTiles.addAll(result.dirtyTiles);
+        return result.filledCount;
+    }
+
+    // ForkJoin 任务类
+    private static class DiscontiguousTask extends RecursiveTask<DiscontiguousResult> {
+        private static final int THRESHOLD = 16384; // 128x128
+
+        private final Canvas canvas;
+        private final int minX, minY, maxX, maxY;
+        private final int tileSize;
+        private final float[] fillColor;
+        private final FillPredicate predicate;
+        private final FillAction action;
+
+        DiscontiguousTask(Canvas canvas, int minX, int minY, int maxX, int maxY,
+                          int tileSize, float[] fillColor,
+                          FillPredicate predicate, FillAction action) {
+            this.canvas = canvas;
+            this.minX = minX; this.minY = minY; this.maxX = maxX; this.maxY = maxY;
+            this.tileSize = tileSize;
+            this.fillColor = fillColor;
+            this.predicate = predicate;
+            this.action = action;
+        }
+
+        @Override
+        protected DiscontiguousResult compute() {
+            int width = maxX - minX + 1;
+            int height = maxY - minY + 1;
+            long totalPixels = (long) width * height;
+
+            if (totalPixels <= THRESHOLD) {
+                return computeSerial();
+            } else {
+                // 二分拆分（优先按较长方向拆分）
+                if (width >= height) {
+                    int midX = minX + (maxX - minX) / 2;
+                    DiscontiguousTask left = new DiscontiguousTask(canvas, minX, minY, midX, maxY,
+                            tileSize, fillColor, predicate, action);
+                    DiscontiguousTask right = new DiscontiguousTask(canvas, midX + 1, minY, maxX, maxY,
+                            tileSize, fillColor, predicate, action);
+                    left.fork();
+                    DiscontiguousResult r = right.compute();
+                    DiscontiguousResult l = left.join();
+                    return merge(l, r);
+                } else {
+                    int midY = minY + (maxY - minY) / 2;
+                    DiscontiguousTask top = new DiscontiguousTask(canvas, minX, minY, maxX, midY,
+                            tileSize, fillColor, predicate, action);
+                    DiscontiguousTask bottom = new DiscontiguousTask(canvas, minX, midY + 1, maxX, maxY,
+                            tileSize, fillColor, predicate, action);
+                    top.fork();
+                    DiscontiguousResult b = bottom.compute();
+                    DiscontiguousResult t = top.join();
+                    return merge(t, b);
+                }
+            }
+        }
+
+        private DiscontiguousResult computeSerial() {
+            Set<Long> localDirty = new HashSet<>();
+            long filled = 0;
+            for (int y = minY; y <= maxY; y++) {
+                for (int x = minX; x <= maxX; x++) {
+                    if (predicate.shouldFill(x, y, canvas)) {
+                        action.apply(x, y, canvas, fillColor);
+                        markDirty(x, y, tileSize, localDirty);
+                        filled++;
+                    }
+                }
+            }
+            return new DiscontiguousResult(localDirty, filled);
+        }
+    }
+
+    // 并行任务结果容器
+    private static class DiscontiguousResult {
+        final Set<Long> dirtyTiles;
+        final long filledCount;
+
+        DiscontiguousResult(Set<Long> dirtyTiles, long filledCount) {
+            this.dirtyTiles = dirtyTiles;
+            this.filledCount = filledCount;
+        }
+    }
+
+    private static DiscontiguousResult merge(DiscontiguousResult a, DiscontiguousResult b) {
+        a.dirtyTiles.addAll(b.dirtyTiles);
+        return new DiscontiguousResult(a.dirtyTiles, a.filledCount + b.filledCount);
     }
 
     // ---------- 扩展后处理 ----------
@@ -336,9 +461,6 @@ public final class FloodFillExecutor {
     }
 
     // ---------- 间隙封闭相关 ----------
-    /**
-     * 从画布指定区域提取线稿蒙版。
-     */
     private BitSet extractLineArtMask(Canvas canvas,
                                       int minX, int minY, int maxX, int maxY,
                                       int width, LineArtDetector detector) {
@@ -356,9 +478,6 @@ public final class FloodFillExecutor {
         return mask;
     }
 
-    /**
-     * 形态学膨胀操作。
-     */
     private BitSet dilate(BitSet mask, int width, int height, int radius) {
         BitSet result = new BitSet(width * height);
         for (int idx = mask.nextSetBit(0); idx >= 0; idx = mask.nextSetBit(idx + 1)) {
@@ -377,16 +496,13 @@ public final class FloodFillExecutor {
         return result;
     }
 
-    /**
-     * 形态学腐蚀操作。
-     */
     private BitSet erode(BitSet mask, int width, int height, int radius) {
         BitSet result = new BitSet(width * height);
         for (int idx = mask.nextSetBit(0); idx >= 0; idx = mask.nextSetBit(idx + 1)) {
             int y = idx / width;
             int x = idx % width;
             boolean allSet = true;
-            outer:
+
             for (int dy = -radius; dy <= radius && allSet; dy++) {
                 int ny = y + dy;
                 if (ny < 0 || ny >= height) { allSet = false; break; }
@@ -406,17 +522,11 @@ public final class FloodFillExecutor {
         return result;
     }
 
-    /**
-     * 形态学闭运算：先膨胀后腐蚀。
-     */
     private BitSet applyMorphologicalClosing(BitSet mask, int width, int height, int radius) {
         BitSet dilated = dilate(mask, width, height, radius);
         return erode(dilated, width, height, radius);
     }
 
-    /**
-     * 构建基于闭合蒙版的禁止填充谓词。
-     */
     private FillPredicate buildGapClosePredicate(BitSet closedMask, int minX, int minY, int width) {
         return new FillPredicate() {
             @Override
