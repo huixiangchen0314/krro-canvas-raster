@@ -10,7 +10,7 @@ import java.util.*;
  * 洪水填充执行器，负责根据 {@link FloodFillRequest} 组装判定与动作，
  * 执行扫描线/非连续填充算法，并收集脏瓦片，返回填充结果。
  * <p>
- * 包含扩展后处理，暂未实现间隙封闭。
+ * 包含扩展后处理及间隙封闭功能。
  */
 public final class FloodFillExecutor {
     private static final FloodFillExecutor INSTANCE = new FloodFillExecutor();
@@ -54,17 +54,29 @@ public final class FloodFillExecutor {
         // 3. 提取种子颜色
         float[] seedColor = extractSeedColor(request, seedX, seedY);
         int channels = canvas.getChannels();
+        int totalWidth = maxX - minX + 1;
+        int totalHeight = maxY - minY + 1;
 
         // 4. 构建判定谓词
         FillPredicate predicate = buildPredicate(request, seedColor, channels);
 
-        // 5. 构建写入动作
+        // 5. 间隙封闭预处理
+        if (request.getGapClosingRadius() > 0 && request.getLineArtDetector() != null) {
+            Canvas lineSource = request.getReferenceCanvas() != null ? request.getReferenceCanvas() : canvas;
+            BitSet lineMask = extractLineArtMask(lineSource, minX, minY, maxX, maxY, totalWidth, request.getLineArtDetector());
+            if (lineMask.cardinality() > 0) {
+                int radius = Math.round(request.getGapClosingRadius());
+                BitSet closedMask = applyMorphologicalClosing(lineMask, totalWidth, totalHeight, radius);
+                FillPredicate gapPred = buildGapClosePredicate(closedMask, minX, minY, totalWidth);
+                predicate = FillPredicate.and(predicate, gapPred);
+            }
+        }
+
+        // 6. 构建写入动作
         FillAction action = buildAction(request, predicate);
 
-        // 6. 执行填充算法，并同步收集脏瓦片和填充蒙版
+        // 7. 执行填充算法，并同步收集脏瓦片和填充蒙版
         Set<Long> dirtyTiles = new HashSet<>();
-        int totalWidth = maxX - minX + 1;
-        int totalHeight = maxY - minY + 1;
         BitSet filledMask = new BitSet(totalWidth * totalHeight);
         long filled;
 
@@ -77,7 +89,7 @@ public final class FloodFillExecutor {
                     request.getFillColor(), predicate, action, dirtyTiles, filledMask);
         }
 
-        // 7. 扩展后处理
+        // 8. 扩展后处理
         if (filled > 0 && request.getExpandRadius() > 0) {
             filled += applyExpand(request, minX, minY, maxX, maxY, tileSize,
                     request.getFillColor(), filledMask, dirtyTiles);
@@ -99,11 +111,9 @@ public final class FloodFillExecutor {
                 ref.getPixel(seedX, seedY, color);
                 return color;
             } else if (targetCh == 1 && refCh >= 2) {
-                // RGBA -> Gray：使用不透明度作为灰度值
                 float opacity = ref.getOpacity(seedX, seedY);
                 return new float[]{opacity};
             } else if (targetCh >= 2 && refCh == 1) {
-                // Gray -> RGBA：灰度填入RGB，Alpha=1.0
                 float gray = ref.getGray(seedX, seedY);
                 float[] rgba = new float[targetCh];
                 rgba[0] = gray;
@@ -231,7 +241,6 @@ public final class FloodFillExecutor {
             int mid = (start + end) / 2;
             queueX.addLast(mid);
             queueY.addLast(y);
-            // 注意：不在这里标记 visited，否则主循环的左右扩展会失败
         }
     }
 
@@ -269,7 +278,6 @@ public final class FloodFillExecutor {
         int width = maxX - minX + 1;
         int height = maxY - minY + 1;
 
-        // 膨胀
         BitSet expandedMask = new BitSet(width * height);
         for (int idx = filledMask.nextSetBit(0); idx >= 0; idx = filledMask.nextSetBit(idx + 1)) {
             int fy = idx / width;
@@ -290,9 +298,7 @@ public final class FloodFillExecutor {
         expandedMask.andNot(filledMask);
         if (expandedMask.isEmpty()) return 0;
 
-        // 构建扩展专用谓词（无颜色匹配）
         FillPredicate expandPredicate = buildExpandPredicate(request, canvas.getChannels());
-        // 扩展动作：直接替换，可加线稿保护
         FillAction expandAction = FillActions.direct();
         if (request.isProtectLineArt()) {
             expandAction = FillActions.protectLineArt(expandAction, request.getLineArtDetector());
@@ -315,7 +321,7 @@ public final class FloodFillExecutor {
     }
 
     private FillPredicate buildExpandPredicate(FloodFillRequest req, int channels) {
-        FillPredicate p = FillPredicate.alwaysTrue(); // 不含颜色匹配
+        FillPredicate p = FillPredicate.alwaysTrue();
         Mask mask = req.getMask();
         if (mask != null) {
             p = FillPredicate.and(p, FillPredicate.mask(mask));
@@ -327,6 +333,99 @@ public final class FloodFillExecutor {
             p = FillPredicate.and(p, FillPredicate.protectLineArt(req.getLineArtDetector()));
         }
         return p;
+    }
+
+    // ---------- 间隙封闭相关 ----------
+    /**
+     * 从画布指定区域提取线稿蒙版。
+     */
+    private BitSet extractLineArtMask(Canvas canvas,
+                                      int minX, int minY, int maxX, int maxY,
+                                      int width, LineArtDetector detector) {
+        int height = maxY - minY + 1;
+        BitSet mask = new BitSet(width * height);
+        float[] pixel = new float[canvas.getChannels()];
+        for (int y = minY; y <= maxY; y++) {
+            for (int x = minX; x <= maxX; x++) {
+                canvas.getPixel(x, y, pixel);
+                if (detector.isLineArt(pixel)) {
+                    mask.set((y - minY) * width + (x - minX));
+                }
+            }
+        }
+        return mask;
+    }
+
+    /**
+     * 形态学膨胀操作。
+     */
+    private BitSet dilate(BitSet mask, int width, int height, int radius) {
+        BitSet result = new BitSet(width * height);
+        for (int idx = mask.nextSetBit(0); idx >= 0; idx = mask.nextSetBit(idx + 1)) {
+            int y = idx / width;
+            int x = idx % width;
+            for (int dy = -radius; dy <= radius; dy++) {
+                int ny = y + dy;
+                if (ny < 0 || ny >= height) continue;
+                for (int dx = -radius; dx <= radius; dx++) {
+                    int nx = x + dx;
+                    if (nx < 0 || nx >= width) continue;
+                    result.set(ny * width + nx);
+                }
+            }
+        }
+        return result;
+    }
+
+    /**
+     * 形态学腐蚀操作。
+     */
+    private BitSet erode(BitSet mask, int width, int height, int radius) {
+        BitSet result = new BitSet(width * height);
+        for (int idx = mask.nextSetBit(0); idx >= 0; idx = mask.nextSetBit(idx + 1)) {
+            int y = idx / width;
+            int x = idx % width;
+            boolean allSet = true;
+            outer:
+            for (int dy = -radius; dy <= radius && allSet; dy++) {
+                int ny = y + dy;
+                if (ny < 0 || ny >= height) { allSet = false; break; }
+                for (int dx = -radius; dx <= radius; dx++) {
+                    int nx = x + dx;
+                    if (nx < 0 || nx >= width) { allSet = false; break; }
+                    if (!mask.get(ny * width + nx)) {
+                        allSet = false;
+                        break;
+                    }
+                }
+            }
+            if (allSet) {
+                result.set(idx);
+            }
+        }
+        return result;
+    }
+
+    /**
+     * 形态学闭运算：先膨胀后腐蚀。
+     */
+    private BitSet applyMorphologicalClosing(BitSet mask, int width, int height, int radius) {
+        BitSet dilated = dilate(mask, width, height, radius);
+        return erode(dilated, width, height, radius);
+    }
+
+    /**
+     * 构建基于闭合蒙版的禁止填充谓词。
+     */
+    private FillPredicate buildGapClosePredicate(BitSet closedMask, int minX, int minY, int width) {
+        return new FillPredicate() {
+            @Override
+            public boolean shouldFill(int x, int y, Canvas canvas) {
+                int relX = x - minX;
+                int relY = y - minY;
+                return !closedMask.get(relY * width + relX);
+            }
+        };
     }
 
     // ---------- 辅助方法 ----------
