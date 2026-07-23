@@ -139,7 +139,7 @@ public final class FloodFillRequest {
      * 若为空，取样仅使用目标画布自身；否则按顺序从参考画布中获取种子颜色。
      * 返回的数组是防御性拷贝，修改不影响原对象。
      */
-    public Canvas getReferenceCanvases() {
+    public Canvas getReferenceCanvas() {
         return referenceCanvas;
     }
 

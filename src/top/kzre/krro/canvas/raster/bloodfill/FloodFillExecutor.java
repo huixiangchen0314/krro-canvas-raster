@@ -59,8 +59,7 @@ public final class FloodFillExecutor {
 
         // ── 3. 提取种子颜色（暂仅使用目标画布） ──
         int channels = canvas.getChannels();
-        float[] seedColor = new float[channels];
-        canvas.getPixel(seedX, seedY, seedColor);
+        float[] seedColor = extractSeedColor(request, seedX, seedY);
 
         // ── 4. 构建判定谓词 ──
         FillPredicate predicate = buildPredicate(request, seedColor, channels);
@@ -278,5 +277,46 @@ public final class FloodFillExecutor {
         int tx = TiledCanvas.tileX(worldX, tileSize);
         int ty = TiledCanvas.tileY(worldY, tileSize);
         dirtyTiles.add(TiledCanvas.pack(tx, ty));
+    }
+
+    /**
+     * 提取种子颜色，优先使用参考画布，失败则回退到目标画布。
+     * 通道数转换规则：
+     * - 同通道：直接读取。
+     * - 参考画布为RGBA，目标为单通道：使用参考画布的getOpacity()作为灰度值。
+     * - 参考画布为单通道，目标为RGBA：灰度填充至R、G、B，Alpha=1.0。
+     * 其他情况回退。
+     */
+    private float[] extractSeedColor(FloodFillRequest request, int seedX, int seedY) {
+        Canvas target = request.getTargetCanvas();
+        Canvas ref = request.getReferenceCanvas();
+        if (ref != null) {
+            int refCh = ref.getChannels();
+            int targetCh = target.getChannels();
+            if (refCh == targetCh) {
+                float[] color = new float[targetCh];
+                ref.getPixel(seedX, seedY, color);
+                return color;
+            } else if (targetCh == 1 && refCh >= 2) {
+                // RGBA -> Gray：使用不透明度作为灰度值
+                float opacity = ref.getOpacity(seedX, seedY);
+                return new float[]{opacity};
+            } else if (targetCh >= 2 && refCh == 1) {
+                // Gray -> RGBA：灰度填入RGB，Alpha=1.0
+                float gray = ref.getGray(seedX, seedY);
+                float[] rgba = new float[targetCh];
+                rgba[0] = gray;                   // R
+                rgba[1] = gray; // G
+                if (targetCh > 2) rgba[2] = gray; // B
+                if (targetCh > 3) rgba[3] = 1.0f; // A
+                return rgba;
+            }
+            // 其他组合回退到目标画布
+            throw new UnsupportedOperationException("Only RGBA or Gray color space s are supported");
+        }
+        // 默认从目标画布读取
+        float[] seed = new float[target.getChannels()];
+        target.getPixel(seedX, seedY, seed);
+        return seed;
     }
 }
