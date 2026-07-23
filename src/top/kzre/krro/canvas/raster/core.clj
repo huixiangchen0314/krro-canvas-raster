@@ -4,8 +4,7 @@
   (:require
     [top.kzre.krro.canvas.core.core :as c]
     [top.kzre.krro.canvas.core.layer.util :as lu]
-    [top.kzre.krro.canvas.raster.spec]
-    [top.kzre.krro.canvas.raster.util :as util])
+    [top.kzre.krro.canvas.raster.spec])
   (:import
     (java.util Collection HashSet UUID)
     (top.kzre.krro.canvas.raster TiledCanvasRenderer)
@@ -47,7 +46,7 @@
 (defmethod c/render-layer! :raster
   [layer ^floats data w h {:keys [dirty-tiles] :as opts}]
   (let [canvas      (:canvas layer)                 ; TiledCanvas 实例
-        blend-mode  (util/blend-mode-str (:blend-mode layer) :normal)
+        blend-mode  (lu/blend-mode-str (:blend-mode layer) :normal)
         opacity     (float (get layer :opacity 1.0))
         transform   (:transform layer lu/identity-matrix)
         matrix2d      (float-array transform)

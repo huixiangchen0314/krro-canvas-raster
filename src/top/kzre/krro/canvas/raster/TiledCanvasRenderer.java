@@ -191,7 +191,8 @@ public final class TiledCanvasRenderer {
     private static void readPixel(float[] data, int px, int py, int tileSize, float[] out) {
         int lx = TiledCanvas.localX(px, tileSize);
         int ly = TiledCanvas.localY(py, tileSize);
-        int idx = (ly * tileSize + lx) * TiledCanvas.CHANNELS;
+        // 固定 RGBA 4 像素
+        int idx = (ly * tileSize + lx) * 4;
         out[0] = data[idx];
         out[1] = data[idx + 1];
         out[2] = data[idx + 2];
